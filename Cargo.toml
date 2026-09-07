@@ -5,7 +5,7 @@ authors = ["rustdesk <info@rustdesk.com>"]
 edition = "2021"
 build= "build.rs"
 description = "student r d p"
-default-run = "studentshare
+default-run = "rustdesk"
 rust-version = "1.75"
 
 [lib]
