@@ -25,6 +25,7 @@ jobs:
 
   build-windows:
     name: Windows x64
+
     needs:
       - generate-bridge
       - build-RustDeskTempTopMostWindow
@@ -33,59 +34,122 @@ jobs:
 
     steps:
 
+      # ---------------------------------------------------------
+      # Checkout
+      # ---------------------------------------------------------
       - name: Checkout RustDesk
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # ---------------------------------------------------------
+      # Restore generated Flutter Rust bridge
+      # ---------------------------------------------------------
       - name: Restore bridge files
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
           path: ./
 
+      # ---------------------------------------------------------
+      # LLVM / Clang
+      # ---------------------------------------------------------
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
         with:
           version: ${{ env.LLVM_VERSION }}
 
+      # ---------------------------------------------------------
+      # Flutter
+      # ---------------------------------------------------------
       - name: Install Flutter
+        id: flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           architecture: x64
 
+      # ---------------------------------------------------------
+      # Replace Flutter engine with RustDesk custom engine
+      # ---------------------------------------------------------
       - name: Replace Flutter engine
         shell: powershell
         run: |
           flutter doctor -v
+
           flutter precache --windows
 
+          Write-Host "Downloading RustDesk custom Flutter engine..."
+
           Invoke-WebRequest `
-            -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip `
-            -OutFile windows-x64-release.zip
+            -Uri "https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip" `
+            -OutFile "windows-x64-release.zip"
+
+          Write-Host "Extracting custom engine..."
+
+          if (Test-Path "windows-x64-release") {
+            Remove-Item `
+              "windows-x64-release" `
+              -Recurse `
+              -Force
+          }
 
           Expand-Archive `
-            -Path windows-x64-release.zip `
-            -DestinationPath windows-x64-release
+            -Path "windows-x64-release.zip" `
+            -DestinationPath "windows-x64-release" `
+            -Force
+
+          # Get the actual Flutter SDK path installed by flutter-action.
+          $flutterRoot = "${{ steps.flutter.outputs.CACHE-PATH }}"
+
+          Write-Host "Flutter root:"
+          Write-Host $flutterRoot
+
+          # Flutter Windows engine directory.
+          $engineDir = Join-Path `
+            $flutterRoot `
+            "bin\cache\artifacts\engine\windows-x64-release"
+
+          Write-Host "Flutter engine directory:"
+          Write-Host $engineDir
+
+          # Make sure the directory exists.
+          if (!(Test-Path $engineDir)) {
+            Write-Host "Engine directory does not exist. Creating it..."
+            
+            New-Item `
+              -ItemType Directory `
+              -Path $engineDir `
+              -Force | Out-Null
+          }
+
+          Write-Host "Copying RustDesk custom engine..."
 
           Copy-Item `
-            windows-x64-release\* `
-            "C:\hostedtoolcache\windows\flutter\stable-${{ env.FLUTTER_VERSION }}-x64\bin\cache\artifacts\engine\windows-x64-release\" `
+            "windows-x64-release\*" `
+            $engineDir `
             -Force `
             -Recurse
 
+          Write-Host "Custom Flutter engine installed successfully."
+
+      # ---------------------------------------------------------
+      # Patch Flutter
+      # ---------------------------------------------------------
       - name: Patch Flutter
         shell: bash
         run: |
           cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff \
-            $(dirname $(dirname $(which flutter)))
+            "$(dirname "$(dirname "$(which flutter)")")"
 
-          cd $(dirname $(dirname $(which flutter)))
+          cd "$(dirname "$(dirname "$(which flutter)")")"
 
           git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
 
+      # ---------------------------------------------------------
+      # Rust
+      # ---------------------------------------------------------
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -93,11 +157,17 @@ jobs:
           targets: x86_64-pc-windows-msvc
           components: rustfmt
 
+      # ---------------------------------------------------------
+      # Rust cache
+      # ---------------------------------------------------------
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: windows-x64
 
+      # ---------------------------------------------------------
+      # vcpkg
+      # ---------------------------------------------------------
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -105,6 +175,9 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
+      # ---------------------------------------------------------
+      # vcpkg dependencies
+      # ---------------------------------------------------------
       - name: Install vcpkg dependencies
         shell: bash
         env:
@@ -115,6 +188,9 @@ jobs:
             --triplet x64-windows-static \
             --x-install-root="$VCPKG_ROOT/installed"
 
+      # ---------------------------------------------------------
+      # Build RustDesk
+      # ---------------------------------------------------------
       - name: Build RustDesk
         shell: powershell
         run: |
@@ -125,12 +201,18 @@ jobs:
             --hwcodec `
             --vram
 
+      # ---------------------------------------------------------
+      # Download RustDeskTempTopMostWindow
+      # ---------------------------------------------------------
       - name: Download RustDeskTempTopMostWindow
         uses: actions/download-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
           path: ./flutter/build/windows/x64/runner/Release
 
+      # ---------------------------------------------------------
+      # Upload Windows build
+      # ---------------------------------------------------------
       - name: Upload Windows RustDesk
         uses: actions/upload-artifact@v4
         with:
